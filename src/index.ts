@@ -1,112 +1,88 @@
+import { EXPRESS_SERVER_PORT, LLAMA_SERVER_PORT, NEXT_APP_PORT } from "./ports";
 import axios from "axios";
+import checkDiskSpace from "check-disk-space";
 import { spawn } from "child_process";
 import cors from "cors";
-import checkDiskSpace from "check-disk-space";
-import { BrowserWindow, app, autoUpdater, dialog, shell } from "electron";
+import { resolve } from "dns";
+import { BrowserWindow, app, autoUpdater } from "electron";
+import { dialog } from "electron";
+import isDev from "electron-is-dev";
 import express from "express";
 import fs from "fs";
+import { createServer } from "http";
 import http from "http";
+import next from "next";
 import os from "os";
 import { Server } from "socket.io";
+import { Readable } from "stream";
 import update from "update-electron-app";
+import { parse } from "url";
 
 const expressapp = express();
-const server = http.createServer(expressapp);
-const io = new Server(server, {
+expressapp.use(express.json());
+const expressServer = http.createServer(expressapp);
+
+const io = new Server(expressServer, {
   cors: {
     origin: "*",
     methods: ["GET", "POST"],
   },
 });
 
-const usePackaged =
-  process.env.npm_lifecycle_event === "start:prod" ? true : false;
-
 const homeDir = app.getPath("home");
+
+export let server: import("child_process").ChildProcessWithoutNullStreams =
+  null as any;
+
+const deviceisWindows = process.platform === "win32";
 
 const DEFAULT_MODEL_LOCATION = homeDir + "/FreedomGPT";
 
-declare const MAIN_WINDOW_WEBPACK_ENTRY: string;
-declare const MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY: string;
+const CHAT_SERVER_LOCATION = app.isPackaged
+  ? deviceisWindows
+    ? process.resourcesPath + "/models/windows/llama/server"
+    : process.resourcesPath + "/models/mac/llama/server"
+  : deviceisWindows
+  ? process.cwd() + "/llama.cpp/bin/Release/server"
+  : process.cwd() + "/llama.cpp/server";
 
 process.env["ELECTRON_DISABLE_SECURITY_WARNINGS"] = "true";
 if (require("electron-squirrel-startup")) app.quit();
 
 expressapp.use(cors());
 
-const EXPRESSPORT = 8889;
+const nextApp = next({ dev: isDev, dir: app.getAppPath() + "/renderer" });
+const handle = nextApp.getRequestHandler();
 
-let program: import("child_process").ChildProcessWithoutNullStreams = null;
-
-const deviceisWindows = process.platform === "win32";
-
-// const CHAT_APP_LOCATION = app.isPackaged
-//   ? process.resourcesPath + "/models/llama/main"
-//   : deviceisWindows
-//   ? process.cwd() + "/llama.cpp/build/bin/Release/main"
-//   : process.cwd() + "/llama.cpp/main";
-
-const isDev: boolean = app.isPackaged ? false : true;
-
-const CHAT_APP_LOCATION = deviceisWindows
-  ? isDev
-    ? usePackaged
-      ? process.cwd() + "/src/model/windows/main"
-      : process.cwd() + "/llama.cpp/build/bin/Release/main"
-    : process.resourcesPath + "/models/llama/main"
-  : isDev
-  ? usePackaged
-    ? process.cwd() + "/src/model/mac/main"
-    : process.cwd() + "/llama.cpp/main"
-  : process.resourcesPath + "/models/llama/main";
+const checkConnection = (): Promise<boolean> => {
+  return new Promise<boolean>((innerResolve) => {
+    resolve("electron.chat.freedomgpt.com", (err) => {
+      innerResolve(!err);
+    });
+  });
+};
 
 io.on("connection", (socket) => {
-  const totalRAM = os.totalmem() / 1024 ** 3;
-  const freeRAM = os.freemem() / 1024 ** 3;
-  const usedRAM = totalRAM - freeRAM;
+  console.log("connected");
 
-  socket.emit("ram_usage", {
-    totalRAM: totalRAM.toFixed(2),
-    freeRAM: freeRAM.toFixed(2),
-    usedRAM: usedRAM.toFixed(2),
-  });
+  const getDeviceInfo = () => {
+    const cpuInfo = os.cpus();
+    const totalRAM = os.totalmem() / 1024 ** 3;
+    const freeRAM = os.freemem() / 1024 ** 3;
+    const usedRAM = totalRAM - freeRAM;
 
-  socket.on("open_github", () => {
-    shell.openExternal("https://github.com/ohmplatform/FreedomGPT", {
-      activate: true,
+    socket.emit("cpu_info", {
+      model: cpuInfo[0].model,
+      speed: cpuInfo[0].speed,
+      times: cpuInfo[0].times,
     });
-  });
 
-  socket.on("open_discord", () => {
-    shell.openExternal("https://discord.com/invite/h77wvJS4ga", {
-      activate: true,
+    socket.emit("ram_usage", {
+      totalRAM: totalRAM.toFixed(2),
+      freeRAM: freeRAM.toFixed(2),
+      usedRAM: usedRAM.toFixed(2),
     });
-  });
 
-  // diskusage.check("/", (err, info) => {
-  //   if (err) {
-  //     console.error(err);
-  //     return;
-  //   }
-
-  //   socket.emit("disk_usage", {
-  //     totalDisk: (info.total / 1024 ** 3).toFixed(2),
-  //     freeDisk: (info.free / 1024 ** 3).toFixed(2),
-  //   });
-  // });
-
-  if (deviceisWindows) {
-    checkDiskSpace("C:/")
-      .then((diskSpace) => {
-        socket.emit("disk_usage", {
-          totalDisk: (diskSpace.size / 1024 ** 3).toFixed(2),
-          freeDisk: (diskSpace.free / 1024 ** 3).toFixed(2),
-        });
-      })
-      .catch((err) => {
-        console.error(err);
-      });
-  } else {
     checkDiskSpace("/")
       .then((diskSpace) => {
         socket.emit("disk_usage", {
@@ -117,20 +93,11 @@ io.on("connection", (socket) => {
       .catch((err) => {
         console.error(err);
       });
-  }
+  };
 
-  // checkDiskSpace("/")
-  //   .then((diskSpace) => {
-  //     socket.emit("disk_usage", {
-  //       totalDisk: (diskSpace.size / 1024 ** 3).toFixed(2),
-  //       freeDisk: (diskSpace.free / 1024 ** 3).toFixed(2),
-  //     });
-  //   })
-  //   .catch((err) => {
-  //     console.error(err);
-  //   });
-
-  let selectedModel: string;
+  socket.on("get_device_info", () => {
+    getDeviceInfo();
+  });
 
   socket.on("delete_model", (data) => {
     fs.unlink(data, (err) => {
@@ -141,10 +108,7 @@ io.on("connection", (socket) => {
     });
   });
 
-  socket.emit("selected_model", selectedModel);
-
   socket.on("choose_model", (data) => {
-    selectedModel = data.model;
     const options = {
       defaultPath: DEFAULT_MODEL_LOCATION,
       buttonLabel: "Choose",
@@ -152,7 +116,7 @@ io.on("connection", (socket) => {
       filters: [
         {
           name: "Model",
-          extensions: ["bin"],
+          extensions: ["gguf"],
         },
       ],
     };
@@ -161,10 +125,9 @@ io.on("connection", (socket) => {
       if (!result.canceled) {
         const filePath = result.filePaths[0];
 
-        console.log(filePath);
         socket.emit("download_complete", {
           downloadPath: filePath,
-          selectedModel,
+          modelData: data,
         });
       }
     });
@@ -183,8 +146,8 @@ io.on("connection", (socket) => {
       defaultPath: filePath,
       buttonLabel: "Download",
     };
-    let downloadPath: string = null;
-    let writer: fs.WriteStream = null;
+    let downloadPath: string = "" as string;
+    let writer: fs.WriteStream = null as any;
     let lastPercentage = 0;
 
     const cancelDownload = () => {
@@ -195,11 +158,13 @@ io.on("connection", (socket) => {
 
     dialog.showSaveDialog(options).then((result) => {
       if (result.canceled) {
+        socket.emit("download_canceled");
         console.log("Cancelled download");
       }
       if (!result.canceled) {
-        downloadPath = result.filePath;
+        downloadPath = result.filePath as string;
         writer = fs.createWriteStream(downloadPath);
+        socket.emit("download_begin");
 
         axios({
           url: data.downloadURL,
@@ -220,7 +185,7 @@ io.on("connection", (socket) => {
             response.data.on("data", (chunk: any) => {
               downloadedBytes += chunk.length;
               const percentage = Math.floor(
-                (downloadedBytes / contentLength) * 100
+                (downloadedBytes / Number(contentLength)) * 100
               );
 
               if (percentage > lastPercentage) {
@@ -239,7 +204,7 @@ io.on("connection", (socket) => {
 
               socket.emit("download_complete", {
                 downloadPath,
-                selectedModel,
+                modelData: data,
               });
             });
 
@@ -263,140 +228,190 @@ io.on("connection", (socket) => {
     });
   });
 
-  socket.on("select_model", (data) => {
-    selectedModel = data.model;
-
-    if (program) {
-      program.kill();
+  socket.on("select_model", (data: { model: string; FILEPATH: string }) => {
+    if (server) {
+      server.kill();
+      server = null as any;
     }
 
-    const modelConfig: { [key: string]: string[] } = {
-      "alpaca-7B-fast": ["-m", data.FILEPATH, "-ins"],
-      "alpaca-7B-full": [
-        "-m",
-        data.FILEPATH,
-        "--ctx_size",
-        "2048",
-        "-n",
-        "-1",
-        "-ins",
-        "-b",
-        "256",
-        "--top_k",
-        "10000",
-        "--temp",
-        "0.2",
-        "--repeat_penalty",
-        "1",
-        "-t",
-        "7",
-      ],
-      "llama-7B-fast": ["-m", data.FILEPATH, "-ins"],
-      "llama-7B-full": [
-        "-m",
-        data.FILEPATH,
-        "-ins",
-        "--ctx_size",
-        "2048",
-        "-n",
-        "-1",
-        "-ins",
-        "-b",
-        "256",
-        "--top_k",
-        "10000",
-        "--temp",
-        "0.2",
-        "--repeat_penalty",
-        "1",
-        "-t",
-        "7",
-      ],
-    };
+    const FILEPATH = `${data.FILEPATH}`;
+    server = spawn(
+      CHAT_SERVER_LOCATION,
+      ["-m", FILEPATH, "-c", "2048", "--port", LLAMA_SERVER_PORT],
+      {
+        detached: false,
+        shell: true,
+        windowsHide: true,
+      }
+    );
 
-    program = spawn(CHAT_APP_LOCATION, modelConfig[selectedModel]);
-
-    program.on("error", (err) => {
+    server.on("error", (err) => {
       console.error("Failed to start child process:", err);
     });
 
-    program.stderr.on("data", (data: Buffer) => {
-      const dat = data.toString("utf8");
-      if (dat.includes("end your input in '\\'.")) {
-        socket.emit("selected_model", selectedModel);
+    server.stderr.on("data", (data) => {
+      const output = data.toString("utf8");
+
+      if (output.includes("llama server listening")) {
+        socket.emit("model_loading", false);
         socket.emit("model_loaded", true);
       }
     });
 
-    program.on("exit", (code, signal) => {
+    server.stderr.on("error", (err) => {
+      console.error("Failed to start child process:", err);
+    });
+
+    server.on("exit", (code, signal) => {
       console.log(
         `Child process exited with code ${code} and signal ${signal}`
       );
     });
 
-    program.stdout.on("data", (data: Buffer) => {
-      let output = data.toString("utf8");
-      let closing = "";
-
-      if (output.includes(">")) {
-        closing = closing.concat(">");
-      }
-
-      output = output.replace(">", "");
-
-      socket.emit("response", output);
-
-      if (closing.includes(">")) {
-        socket.emit("chatend");
-        closing = "";
-      }
-    });
-
-    program.on("spawn", () => {
-      console.log("spawned");
+    server.on("spawn", () => {
       socket.emit("model_loading", true);
-      socket.emit("model_loaded", false);
     });
-  });
-
-  socket.on("stopResponding", () => {
-    if (program) {
-      program.kill("SIGINT");
-    }
-  });
-
-  socket.on("message", (message) => {
-    if (program && program.stdin) {
-      program.stdin.write(message + "\n");
-    }
   });
 
   socket.on("disconnect", (reason) => {
-    if (program) {
-      program.kill();
-      program = null;
+    if (server) {
+      socket.emit("model_stopped", true);
+      server.kill();
+      server = null as any;
     }
     console.log(`Socket disconnected: ${reason}`);
   });
+
+  socket.on("kill_process", () => {
+    if (server) {
+      socket.emit("model_stopped", true);
+      server.kill();
+      server = null as any;
+    }
+  });
 });
 
-server.listen(process.env.PORT || EXPRESSPORT, () => {
-  console.log(`Server listening on port ${EXPRESSPORT}`);
+const streamingFunction = async ({ promptToSend }) => {
+  const encoder = new TextEncoder();
+  const stream = new Readable({
+    read() {},
+  });
+
+  const fetchStreamData = async () => {
+    const result = await fetch(
+      `http://127.0.0.1:${LLAMA_SERVER_PORT}/completion`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          prompt: promptToSend,
+          n_predict: 512,
+          stream: true,
+        }),
+        headers: {
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": "*",
+        },
+      }
+    );
+
+    for await (const chunk of result.body as any) {
+      const t = Buffer.from(chunk).toString("utf8");
+
+      try {
+        if (t.startsWith("data: ")) {
+          const message = JSON.parse(t.substring(6));
+          (stream as any).push(encoder.encode(message.content));
+
+          if (message.stop) {
+            (stream as any).push(null);
+          }
+        }
+      } catch (error) {
+        (stream as any).push(null);
+      }
+    }
+  };
+
+  fetchStreamData();
+
+  return stream;
+};
+
+expressapp.post("/api/edge", async (req, res) => {
+  const { messages, continueMessage } = req.body;
+
+  try {
+    let promptToSend = "";
+
+    let messagesToSend = messages;
+
+    const conversation = messagesToSend
+      .map((message) => {
+        if (message.role === "user") {
+          return `USER: ${message.content}`;
+        } else if (message.role === "assistant") {
+          return `ASSISTANT: ${message.content}`;
+        }
+        if (continueMessage) {
+          return `USER: continue`;
+        }
+      })
+      .join("\n");
+
+    promptToSend += `USER:\n${conversation}\nASSISTANT:`;
+
+    try {
+      const streamResponse = await streamingFunction({
+        promptToSend,
+      });
+
+      res.set({ "Content-Type": "text/plain" });
+      streamResponse.pipe(res);
+    } catch (error) {
+      console.error("Error:", error);
+      res.status(500).send("Something went wrong");
+    }
+  } catch (error) {
+    console.error("Error fetching the data:", error);
+    res.status(500).send(`Something went wrong: ${error.message}`);
+  }
 });
 
-const createWindow = (): void => {
+expressServer.listen(EXPRESS_SERVER_PORT, () => {
+  console.log(`Server listening on port ${EXPRESS_SERVER_PORT}`);
+});
+
+const createWindow = async () => {
   const mainWindow = new BrowserWindow({
+    width: 1920,
     height: 1080,
-    width: 1080,
     webPreferences: {
-      preload: MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY,
+      nodeIntegration: false,
+      contextIsolation: false,
+      devTools: true,
     },
   });
 
-  mainWindow.loadURL(MAIN_WINDOW_WEBPACK_ENTRY);
-  // if (!app.isPackaged) {
-  //   mainWindow.webContents.openDevTools();
-  // }
+  checkConnection().then(async (isOnline) => {
+    if (isOnline) {
+      console.log("Online");
+
+      mainWindow.loadURL(`https://electron.chat.freedomgpt.com/`);
+    } else {
+      console.log("No connection");
+
+      await nextApp.prepare();
+
+      createServer((req: any, res: any) => {
+        const parsedUrl = parse(req.url, true);
+        handle(req, res, parsedUrl);
+      }).listen(NEXT_APP_PORT, () => {
+        console.log(`> Ready on http://localhost:${NEXT_APP_PORT}`);
+      });
+
+      mainWindow.loadURL(`http://localhost:${NEXT_APP_PORT}/`);
+    }
+  });
 
   mainWindow.once("ready-to-show", () => {
     update();

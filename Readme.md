@@ -26,15 +26,6 @@ allows users to run alpaca models on their local machine.
 - [Yarn](https://classic.yarnpkg.com/en/docs/install/#windows-stable)
 - [Git](https://git-scm.com/downloads)
 
-# If you want to run the project
-
-```sh
-git clone --recursive https://github.com/ohmplatform/FreedomGPT.git freedom-gpt
-cd freedom-gpt
-yarn install
-yarn start:prod
-```
-
 # If you want to contribute to the project
 
 ## Working with the repository
@@ -67,11 +58,6 @@ cmake --build . --config Release
 
 - You should now have a `Release` folder with a `main.exe` file inside it. You can run this file to test the chat client.
 
-## Changing the API URL
-
-We are using `http://localhost:8889` as the API URL, you can change it in the file
-`src/index.ts`
-
 ## Running the application
 
 To run the application, run the following command in your terminal:
@@ -82,28 +68,9 @@ yarn start
 ⦻ Make sure you are in the root directory of the project.
 ```
 
-## Dockerizing the application
+<!-- ## Working Video
 
-To run the docker image, run the following command in your terminal:
-
-```sh
-docker pull freedomgpt/freedomgpt
-docker run -d -p 8889:8889 freedomgpt/freedomgpt
-```
-
-If you want to build the docker image yourself, run the following command in your terminal:
-
-```sh
-docker build -t freedomgpt/freedomgpt .
-
-OR
-
-yarn docker
-```
-
-## Working Video
-
-https://user-images.githubusercontent.com/54356944/233825525-d95accf3-a26b-4f37-8fc1-6e922f782a66.mov
+https://user-images.githubusercontent.com/54356944/233825525-d95accf3-a26b-4f37-8fc1-6e922f782a66.mov -->
 
 # Credits
 
@@ -113,9 +80,7 @@ This project utilizes several open-source packages and libraries, without which 
 
 "LLAMA" by Facebook Research - a low-latency, large-scale approximate nearest neighbor search algorithm. https://github.com/facebookresearch/llama
 
-"Alpaca" by Stanford CRFM - a framework for understanding and improving the efficiency and robustness of algorithms. https://crfm.stanford.edu/2023/03/13/alpaca.html
-
-"alpaca-lora" by tloen - a Python library for working with LoRa radios and the Alpaca protocol. https://github.com/tloen/alpaca-lora
+"Chatbot UI" - https://github.com/mckaywrigley/chatbot-ui
 
 We would like to express our gratitude to the developers of these packages and their contributors for making their work available to the public under open source licenses. Their contributions have enabled us to build a more robust and efficient project.
 
